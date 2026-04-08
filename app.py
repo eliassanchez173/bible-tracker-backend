@@ -29,7 +29,7 @@ app.secret_key = secret_key
 # - SameSite=Lax blocks CSRF from cross-site requests
 # - Secure=False allows HTTP locally (set True in production)
 # - HttpOnly prevents JavaScript from reading the cookie
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'
 app.config['SESSION_COOKIE_SECURE'] = os.getenv('FLASK_ENV') == 'production'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 
