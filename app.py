@@ -35,14 +35,20 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 
 # ============================================================
 # CORS
-# Only allow requests from the React dev server locally.
-# In production this should be updated to your Netlify URL.
+# Allows requests from the React dev server locally and the
+# Netlify production URL. FRONTEND_URL is set via environment
+# variable on Render — never hardcoded.
 # ============================================================
+allowed_origins = [
+    "http://localhost:5173",
+    os.getenv('FRONTEND_URL', '')
+]
+
 CORS(app,
      supports_credentials=True,
-     origins=["http://localhost:5173"],
-     allow_headers=["Content-Type"])
-
+     origins=[o for o in allowed_origins if o],
+     allow_headers=["Content-Type"],
+     methods=["GET", "POST", "DELETE", "OPTIONS"])
 # ============================================================
 # RATE LIMITING (OWASP: Protect Against Brute Force)
 # Uses the requester's IP address as the key.
