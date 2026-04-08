@@ -387,11 +387,11 @@ def get_progress():
     return jsonify([dict(row) for row in rows]), 200
 
 
-# ============================================================
-# STARTUP
-# ============================================================
-if __name__ == '__main__':
+# Initialize database on startup regardless of how the app is run
+# This ensures tables exist whether running via Flask or gunicorn
+with app.app_context():
     init_db()
-    # debug=True only in development — never in production
+
+if __name__ == '__main__':
     debug_mode = os.getenv('FLASK_ENV') == 'development'
     app.run(debug=debug_mode)
