@@ -79,46 +79,41 @@ VALID_BOOKS = {
     '1 John', '2 John', '3 John', 'Jude', 'Revelation'
 }
 
-def validate_auth_input(data):
-    unexpected = set(data.keys()) - REGISTER_FIELDS
-    if unexpected:
-        return False, f'Unexpected fields: {", ".join(unexpected)}'
-    username = data.get('username')
-    password = data.get('password')
-    if not isinstance(username, str) or not isinstance(password, str):
-        return False, 'Username and password must be strings'
-    if len(username) < 3 or len(username) > 32:
-        return False, 'Username must be between 3 and 32 characters'
-    if len(password) < 8 or len(password) > 128:
-        return False, 'Password must be between 8 and 128 characters'
-    if not re.match(r'^[a-zA-Z0-9_]+$', username):
-        return False, 'Username can only contain letters, numbers, and underscores'
-    return True, None
-
 def validate_log_input(data):
     unexpected = set(data.keys()) - LOG_FIELDS
     if unexpected:
         return False, f'Unexpected fields: {", ".join(unexpected)}'
+
     book = data.get('book')
     chapter = data.get('chapter')
     date = data.get('date')
     notes = data.get('notes', '')
-    if not book or not chapter or not date:
+
+    if not book or chapter is None or not date:
         return False, 'Book, chapter, and date are required'
+
     if not isinstance(book, str):
         return False, 'Book must be a string'
-    if not isinstance(chapter, int) or isinstance(chapter, bool):
-        return False, 'Chapter must be an integer'
+
+    # Chapter can now be an int (single) or list of ints (range/whole book)
+    if isinstance(chapter, list):
+        if not all(isinstance(c, int) and 1 <= c <= 150 for c in chapter):
+            return False, 'All chapters must be integers between 1 and 150'
+    elif isinstance(chapter, int) and not isinstance(chapter, bool):
+        if chapter < 1 or chapter > 150:
+            return False, 'Chapter must be between 1 and 150'
+    else:
+        return False, 'Chapter must be an integer or list of integers'
+
     if not isinstance(date, str):
         return False, 'Date must be a string'
     if book not in VALID_BOOKS:
         return False, 'Invalid book name'
-    if chapter < 1 or chapter > 150:
-        return False, 'Chapter must be between 1 and 150'
     if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
         return False, 'Date must be in YYYY-MM-DD format'
     if notes and len(notes) > 500:
         return False, 'Notes must be 500 characters or less'
+
     return True, None
 
 # ============================================================
@@ -204,18 +199,30 @@ def log_reading():
     data = request.get_json(silent=True)
     if not data:
         return jsonify({'error': 'Invalid JSON'}), 400
+
     valid, error = validate_log_input(data)
     if not valid:
         return jsonify({'error': error}), 400
+
     notes = data.get('notes', '').strip()
+    date = data['date']
+    book = data['book']
+    chapter = data['chapter']
+
+    # Normalize to always be a list
+    chapters = chapter if isinstance(chapter, list) else [chapter]
+
     conn = get_db()
-    conn.execute(
-        'INSERT INTO readings (user_id, book, chapter, date, notes) VALUES (?, ?, ?, ?, ?)',
-        (user_id, data['book'], data['chapter'], data['date'], notes)
-    )
+    for ch in chapters:
+        conn.execute(
+            'INSERT INTO readings (user_id, book, chapter, date, notes) VALUES (?, ?, ?, ?, ?)',
+            (user_id, book, ch, date, notes)
+        )
     conn.commit()
     conn.close()
-    return jsonify({'message': 'Reading logged successfully'}), 201
+
+    count = len(chapters)
+    return jsonify({'message': f'{count} chapter{"s" if count > 1 else ""} logged successfully'}), 201
 
 @app.route('/api/logs', methods=['GET'])
 @jwt_required()
