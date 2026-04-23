@@ -253,16 +253,25 @@ def log_reading():
 
     conn = get_db()
     cur = conn.cursor()
+    inserted = 0
     for ch in chapters:
         cur.execute(
-            'INSERT INTO readings (user_id, book, chapter, date, notes) VALUES (%s, %s, %s, %s, %s)',
-            (user_id, book, ch, date, notes)
+            'SELECT id FROM readings WHERE user_id = %s AND book = %s AND chapter = %s',
+            (user_id, book, ch)
         )
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO readings (user_id, book, chapter, date, notes) VALUES (%s, %s, %s, %s, %s)',
+                (user_id, book, ch, date, notes)
+            )
+            inserted += 1
     conn.commit()
     cur.close()
     conn.close()
 
-    count = len(chapters)
+    count = inserted
+    if count == 0:
+        return jsonify({'message': 'All chapters already logged'}), 200
     return jsonify({'message': f'{count} chapter{"s" if count > 1 else ""} logged successfully'}), 201
 
 @app.route('/api/logs', methods=['GET'])
