@@ -18,3 +18,4 @@ python-dotenv==1.2.2
 typing_extensions==4.15.0
 Werkzeug==3.1.7
 wrapt==2.1.2
+psycopg2-binary
