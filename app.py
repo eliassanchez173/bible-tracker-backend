@@ -1,5 +1,7 @@
 import os
 import re
+import psycopg2
+import psycopg2.extras
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_limiter import Limiter
@@ -62,7 +64,21 @@ limiter = Limiter(
 # ============================================================
 REGISTER_FIELDS = {'username', 'password'}
 LOG_FIELDS = {'book', 'chapter', 'date', 'notes'}
-
+def validate_auth_input(data):
+    unexpected = set(data.keys()) - REGISTER_FIELDS
+    if unexpected:
+        return False, f'Unexpected fields: {", ".join(unexpected)}'
+    username = data.get('username', '')
+    password = data.get('password', '')
+    if not username or not password:
+        return False, 'Username and password are required'
+    if not isinstance(username, str) or not isinstance(password, str):
+        return False, 'Username and password must be strings'
+    if len(username) < 3 or len(username) > 32:
+        return False, 'Username must be between 3 and 32 characters'
+    if len(password) < 8:
+        return False, 'Password must be at least 8 characters'
+    return True, None
 VALID_BOOKS = {
     'Genesis', 'Exodus', 'Leviticus', 'Numbers', 'Deuteronomy',
     'Joshua', 'Judges', 'Ruth', '1 Samuel', '2 Samuel',
@@ -78,6 +94,22 @@ VALID_BOOKS = {
     'Titus', 'Philemon', 'Hebrews', 'James', '1 Peter', '2 Peter',
     '1 John', '2 John', '3 John', 'Jude', 'Revelation'
 }
+
+def validate_auth_input(data):
+    unexpected = set(data.keys()) - REGISTER_FIELDS
+    if unexpected:
+        return False, f'Unexpected fields: {", ".join(unexpected)}'
+    username = data.get('username', '')
+    password = data.get('password', '')
+    if not username or not password:
+        return False, 'Username and password are required'
+    if not isinstance(username, str) or not isinstance(password, str):
+        return False, 'Username and password must be strings'
+    if len(username) < 3 or len(username) > 32:
+        return False, 'Username must be between 3 and 32 characters'
+    if len(password) < 8:
+        return False, 'Password must be at least 8 characters'
+    return True, None
 
 def validate_log_input(data):
     unexpected = set(data.keys()) - LOG_FIELDS
@@ -95,7 +127,6 @@ def validate_log_input(data):
     if not isinstance(book, str):
         return False, 'Book must be a string'
 
-    # Chapter can now be an int (single) or list of ints (range/whole book)
     if isinstance(chapter, list):
         if not all(isinstance(c, int) and 1 <= c <= 150 for c in chapter):
             return False, 'All chapters must be integers between 1 and 150'
@@ -117,6 +148,17 @@ def validate_log_input(data):
     return True, None
 
 # ============================================================
+# HELPERS
+# ============================================================
+
+def fetchone(cursor):
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+def fetchall(cursor):
+    return [dict(row) for row in cursor.fetchall()]
+
+# ============================================================
 # AUTH ENDPOINTS
 # ============================================================
 
@@ -132,11 +174,13 @@ def register():
     password_hash = generate_password_hash(data['password'])
     try:
         conn = get_db()
-        conn.execute(
-            'INSERT INTO users (username, password_hash) VALUES (?, ?)',
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO users (username, password_hash) VALUES (%s, %s)',
             (data['username'], password_hash)
         )
         conn.commit()
+        cur.close()
         conn.close()
         return jsonify({'message': 'Account created successfully'}), 201
     except Exception:
@@ -152,24 +196,19 @@ def login():
     if not valid:
         return jsonify({'error': error}), 400
     conn = get_db()
-    user = conn.execute(
-        'SELECT * FROM users WHERE username = ?',
-        (data['username'],)
-    ).fetchone()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute('SELECT * FROM users WHERE username = %s', (data['username'],))
+    user = fetchone(cur)
+    cur.close()
     conn.close()
     if not user or not check_password_hash(user['password_hash'], data['password']):
         return jsonify({'error': 'Invalid username or password'}), 401
 
-    # Create JWT token — identity is the user's ID as a string
     token = create_access_token(identity=str(user['id']))
-    return jsonify({
-        'token': token,
-        'username': user['username']
-    }), 200
+    return jsonify({'token': token, 'username': user['username']}), 200
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
-    # With JWT, logout is handled client-side by deleting the token
     return jsonify({'message': 'Logged out successfully'}), 200
 
 @app.route('/api/me', methods=['GET'])
@@ -179,9 +218,10 @@ def me():
     if not user_id:
         return jsonify({'error': 'Not logged in'}), 401
     conn = get_db()
-    user = conn.execute(
-        'SELECT username FROM users WHERE id = ?', (user_id,)
-    ).fetchone()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute('SELECT username FROM users WHERE id = %s', (user_id,))
+    user = fetchone(cur)
+    cur.close()
     conn.close()
     if not user:
         return jsonify({'error': 'User not found'}), 404
@@ -209,16 +249,17 @@ def log_reading():
     book = data['book']
     chapter = data['chapter']
 
-    # Normalize to always be a list
     chapters = chapter if isinstance(chapter, list) else [chapter]
 
     conn = get_db()
+    cur = conn.cursor()
     for ch in chapters:
-        conn.execute(
-            'INSERT INTO readings (user_id, book, chapter, date, notes) VALUES (?, ?, ?, ?, ?)',
+        cur.execute(
+            'INSERT INTO readings (user_id, book, chapter, date, notes) VALUES (%s, %s, %s, %s, %s)',
             (user_id, book, ch, date, notes)
         )
     conn.commit()
+    cur.close()
     conn.close()
 
     count = len(chapters)
@@ -230,12 +271,15 @@ def log_reading():
 def get_logs():
     user_id = get_jwt_identity()
     conn = get_db()
-    logs = conn.execute(
-        'SELECT * FROM readings WHERE user_id = ? ORDER BY date DESC, id DESC',
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        'SELECT * FROM readings WHERE user_id = %s ORDER BY date DESC, id DESC',
         (user_id,)
-    ).fetchall()
+    )
+    logs = fetchall(cur)
+    cur.close()
     conn.close()
-    return jsonify([dict(log) for log in logs]), 200
+    return jsonify(logs), 200
 
 @app.route('/api/log/<int:log_id>', methods=['DELETE'])
 @jwt_required()
@@ -243,14 +287,19 @@ def get_logs():
 def delete_log(log_id):
     user_id = get_jwt_identity()
     conn = get_db()
-    log = conn.execute(
-        'SELECT * FROM readings WHERE id = ? AND user_id = ?',
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        'SELECT * FROM readings WHERE id = %s AND user_id = %s',
         (log_id, user_id)
-    ).fetchone()
+    )
+    log = fetchone(cur)
     if not log:
+        cur.close()
+        conn.close()
         return jsonify({'error': 'Reading not found'}), 404
-    conn.execute('DELETE FROM readings WHERE id = ?', (log_id,))
+    cur.execute('DELETE FROM readings WHERE id = %s', (log_id,))
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({'message': 'Reading deleted'}), 200
 
@@ -260,10 +309,13 @@ def delete_log(log_id):
 def get_streak():
     user_id = get_jwt_identity()
     conn = get_db()
-    logs = conn.execute(
-        'SELECT DISTINCT date FROM readings WHERE user_id = ? ORDER BY date DESC',
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        'SELECT DISTINCT date FROM readings WHERE user_id = %s ORDER BY date DESC',
         (user_id,)
-    ).fetchall()
+    )
+    logs = fetchall(cur)
+    cur.close()
     conn.close()
     if not logs:
         return jsonify({'streak': 0}), 200
@@ -289,12 +341,15 @@ def get_streak():
 def get_progress():
     user_id = get_jwt_identity()
     conn = get_db()
-    rows = conn.execute(
-        'SELECT book, COUNT(*) as count FROM readings WHERE user_id = ? GROUP BY book ORDER BY count DESC',
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        'SELECT book, COUNT(*) as count FROM readings WHERE user_id = %s GROUP BY book ORDER BY count DESC',
         (user_id,)
-    ).fetchall()
+    )
+    rows = fetchall(cur)
+    cur.close()
     conn.close()
-    return jsonify([dict(row) for row in rows]), 200
+    return jsonify(rows), 200
 
 # ============================================================
 # STARTUP
