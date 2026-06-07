@@ -390,6 +390,43 @@ def get_chapter_text():
     data = response.json()
     passage_text = data.get('passages', [''])[0]
     return jsonify({'text': passage_text})
+
+BIBLE_IDS = {
+    'niv': '78a9f6124f344018-01',
+    'nlt': 'd6e14a625393b4da-01',
+    'nkjv': '63097d2a0a2f7db3-01'
+}
+
+@app.route('/get_chapter_apibible', methods=['GET'])
+def get_chapter_apibible():
+    book = request.args.get('book')
+    chapter = request.args.get('chapter')
+    translation = request.args.get('translation')
+
+    if not book or not chapter or not translation:
+        return jsonify({'error': 'Missing parameters'}), 400
+
+    bible_id = BIBLE_IDS.get(translation)
+    if not bible_id:
+        return jsonify({'error': 'Unknown translation'}), 400
+
+    api_key = os.environ.get('BIBLE_API_KEY')
+
+    # First look up the chapter ID (API.Bible uses its own chapter IDs)
+    chapter_id = f'{book}.{chapter}'
+
+    response = http_requests.get(
+        f'https://api.scripture.api.bible/v1/bibles/{bible_id}/chapters/{chapter_id}',
+        params={'content-type': 'text', 'include-verse-numbers': True},
+        headers={'api-key': api_key}
+    )
+
+    if response.status_code != 200:
+        return jsonify({'error': 'Failed to fetch from API.Bible'}), 500
+
+    data = response.json()
+    text = data.get('data', {}).get('content', '')
+    return jsonify({'text': text})
 # ============================================================
 # STARTUP
 # ============================================================
