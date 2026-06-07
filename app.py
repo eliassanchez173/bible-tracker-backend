@@ -12,6 +12,7 @@ from flask_jwt_extended import (
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 from database import init_db, get_db
+import requests as http_requests
 
 # ============================================================
 # CONFIGURATION
@@ -360,6 +361,35 @@ def get_progress():
     conn.close()
     return jsonify(rows), 200
 
+@app.route('/get_chapter_text', methods=['GET'])
+def get_chapter_text():
+    book = request.args.get('book')
+    chapter = request.args.get('chapter')
+
+    if not book or not chapter:
+        return jsonify({'error': 'Missing book or chapter'}), 400
+
+    esv_api_key = os.environ.get('ESV_API_KEY')
+    query = f'{book} {chapter}'
+
+    response = http_requests.get(
+        'https://api.esv.org/v3/passage/text/',
+        params={
+            'q': query,
+            'include-headings': True,
+            'include-footnotes': False,
+            'include-verse-numbers': True,
+            'include-short-copyright': True,
+        },
+        headers={'Authorization': f'Token {esv_api_key}'}
+    )
+
+    if response.status_code != 200:
+        return jsonify({'error': 'Failed to fetch from ESV API'}), 500
+
+    data = response.json()
+    passage_text = data.get('passages', [''])[0]
+    return jsonify({'text': passage_text})
 # ============================================================
 # STARTUP
 # ============================================================
